@@ -51,6 +51,7 @@ class AgentConfig:
 
     search: SearchConfig
     require_hyperparameter_tuning: bool = False
+    time_limit: int | None = None  # Optional time limit for MLE-Bench compatibility
 
 
 @dataclass
