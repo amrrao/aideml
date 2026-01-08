@@ -43,6 +43,25 @@ review_func_spec = FunctionSpec(
     description="Submit a review evaluating the output of the training script.",
 )
 
+hyperparameter_tuning_check_spec = FunctionSpec(
+    name="check_hyperparameter_tuning",
+    json_schema={
+        "type": "object",
+        "properties": {
+            "has_hyperparameter_tuning": {
+                "type": "boolean",
+                "description": "true if the code includes hyperparameter tuning/optimization (e.g., GridSearchCV, RandomizedSearchCV, Optuna, hyperopt, manual parameter sweeps, cross-validation with parameter search, etc.), false otherwise.",
+            },
+            "explanation": {
+                "type": "string",
+                "description": "Brief explanation of why hyperparameter tuning is or is not present in the code.",
+            },
+        },
+        "required": ["has_hyperparameter_tuning", "explanation"],
+    },
+    description="Check if the code includes hyperparameter tuning or optimization.",
+)
+
 
 class Agent:
     def __init__(
@@ -241,6 +260,15 @@ class Agent:
         )
 
     def _debug(self, parent_node: Node) -> Node:
+        # Check if this is a hyperparameter tuning requirement issue
+        is_tuning_issue = False
+        if (
+            self.acfg.require_hyperparameter_tuning
+            and parent_node.exc_type is None
+            and "Missing hyperparameter tuning" in (parent_node.analysis or "")
+        ):
+            is_tuning_issue = True
+
         prompt: Any = {
             "Introduction": (
                 "You are a Kaggle grandmaster attending a competition. "
@@ -253,6 +281,17 @@ class Agent:
             "Execution output": wrap_code(parent_node.term_out, lang=""),
             "Instructions": {},
         }
+        
+        if is_tuning_issue:
+            prompt["Instructions"]["Critical requirement"] = [
+                "**The previous solution is missing hyperparameter tuning/optimization.**",
+                "You MUST add systematic hyperparameter tuning to the solution. This includes:",
+                "- Using GridSearchCV, RandomizedSearchCV, Optuna, hyperopt, or similar optimization libraries",
+                "- Systematic exploration of hyperparameter space (learning rate, regularization, tree depth, batch size, etc.)",
+                "- Cross-validation with parameter search",
+                "- The solution should NOT be accepted without proper hyperparameter tuning.",
+            ]
+        
         prompt["Instructions"] |= self._prompt_resp_fmt
         prompt["Instructions"] |= {
             "Bugfix improvement sketch guideline": [
@@ -293,6 +332,36 @@ class Agent:
         )
         self.journal.append(result_node)
 
+    def _has_hyperparameter_tuning(self, code: str) -> tuple[bool, str]:
+        """Check if the code includes hyperparameter tuning using LLM."""
+        prompt = {
+            "Introduction": (
+                "You are analyzing Python machine learning code to determine if it includes hyperparameter tuning or optimization. "
+                "Hyperparameter tuning includes: GridSearchCV, RandomizedSearchCV, Optuna, hyperopt, manual parameter sweeps, "
+                "cross-validation with parameter search, Bayesian optimization, or any systematic exploration of hyperparameter space."
+            ),
+            "Code": wrap_code(code),
+            "Instructions": (
+                "Analyze the code and determine if it includes hyperparameter tuning. "
+                "Look for systematic parameter search, optimization libraries, or iterative parameter exploration."
+            ),
+        }
+
+        response = cast(
+            dict,
+            query(
+                system_message=prompt,
+                user_message=None,
+                func_spec=hyperparameter_tuning_check_spec,
+                model=self.acfg.feedback.model,
+                temperature=self.acfg.feedback.temp,
+            ),
+        )
+
+        has_tuning = response.get("has_hyperparameter_tuning", False)
+        explanation = response.get("explanation", "")
+        return has_tuning, explanation
+
     def parse_exec_result(self, node: Node, exec_result: ExecutionResult):
         logger.info(f"Agent is parsing execution results for node {node.id}")
 
@@ -330,6 +399,24 @@ class Agent:
             or node.exc_type is not None
             or response["metric"] is None
         )
+
+        # Check for hyperparameter tuning if required and execution succeeded
+        if (
+            self.acfg.require_hyperparameter_tuning
+            and not node.is_buggy
+            and response["metric"] is not None
+        ):
+            has_tuning, tuning_explanation = self._has_hyperparameter_tuning(node.code)
+            if not has_tuning:
+                logger.info(
+                    f"Node {node.id} marked as buggy due to missing hyperparameter tuning. "
+                    f"Explanation: {tuning_explanation}"
+                )
+                node.is_buggy = True
+                node.analysis = (
+                    f"{node.analysis}\n\n"
+                    f"**Missing hyperparameter tuning**: {tuning_explanation}"
+                )
 
         if node.is_buggy:
             node.metric = WorstMetricValue()
