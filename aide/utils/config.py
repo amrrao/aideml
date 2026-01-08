@@ -45,12 +45,12 @@ class AgentConfig:
     k_fold_validation: int
     expose_prediction: bool
     data_preview: bool
-    require_hyperparameter_tuning: bool = False
 
     code: StageConfig
     feedback: StageConfig
 
     search: SearchConfig
+    require_hyperparameter_tuning: bool = False
 
 
 @dataclass
