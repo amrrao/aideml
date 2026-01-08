@@ -41,7 +41,7 @@ agent:
   # whether to provide the agent with a preview of the data
   data_preview: True
   # whether to require hyperparameter tuning in all solutions
-  require_hyperparameter_tuning: False
+  require_hyperparameter_tuning: True
 
   # LLM settings for coding
   code:
