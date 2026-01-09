@@ -217,14 +217,15 @@ class Agent:
             ],
         }
         # Add hyperparameter tuning guidance if required
-        # Only enforce during first 1/3 of time limit
+        # Only enforce during first 1/4 of time limit for short timeouts, 1/3 for longer
         elapsed_time = time.time() - self.start_time
         time_limit_secs = self.acfg.time_limit if self.acfg.time_limit else float('inf')
-        if self.acfg.require_hyperparameter_tuning and elapsed_time < (time_limit_secs / 3.0):
+        disable_threshold = (time_limit_secs / 4.0) if time_limit_secs < 1200 else (time_limit_secs / 3.0)
+        if self.acfg.require_hyperparameter_tuning and elapsed_time < disable_threshold:
             prompt["Instructions"]["Hyperparameter tuning note"] = [
                 "Note: This solution will need hyperparameter tuning in later iterations.",
-                "When adding hyperparameter tuning, prefer RandomizedSearchCV (n_iter=10-20) or Optuna (n_trials=10-20).",
-                "**CRITICAL: Use ONLY 3 CV folds and limit n_iter to 10-20 to avoid timeouts.**",
+                "When adding hyperparameter tuning, prefer RandomizedSearchCV (n_iter=5-10) or Optuna (n_trials=5-10).",
+                "**CRITICAL: Use ONLY 3 CV folds and limit n_iter to 5-10 to avoid timeouts. Time is very limited!**",
                 "These methods are typically more effective than GridSearchCV while being faster and less likely to timeout.",
             ]
         prompt["Instructions"] |= self._prompt_impl_guideline
@@ -264,16 +265,17 @@ class Agent:
             ],
         }
         # Add hyperparameter tuning guidance if required and not present
-        # Only enforce during first 1/3 of time limit
+        # Only enforce during first 1/4 of time limit for short timeouts, 1/3 for longer
         elapsed_time = time.time() - self.start_time
         time_limit_secs = self.acfg.time_limit if self.acfg.time_limit else float('inf')
-        if self.acfg.require_hyperparameter_tuning and elapsed_time < (time_limit_secs / 3.0):
+        disable_threshold = (time_limit_secs / 4.0) if time_limit_secs < 1200 else (time_limit_secs / 3.0)
+        if self.acfg.require_hyperparameter_tuning and elapsed_time < disable_threshold:
             has_tuning, _ = self._has_hyperparameter_tuning(parent_node.code)
             if not has_tuning:
                 prompt["Instructions"]["Hyperparameter tuning requirement"] = [
                     "**IMPORTANT: The previous solution is missing hyperparameter tuning.**",
-                    "If improving the model, consider adding hyperparameter tuning using RandomizedSearchCV (n_iter=10-20) or Optuna (n_trials=10-20).",
-                    "**CRITICAL: Use ONLY 3 CV folds and limit n_iter to 10-20 to avoid timeouts.**",
+                    "If improving the model, consider adding hyperparameter tuning using RandomizedSearchCV (n_iter=5-10) or Optuna (n_trials=5-10).",
+                    "**CRITICAL: Use ONLY 3 CV folds and limit n_iter to 5-10 to avoid timeouts. Time is very limited!**",
                     "These methods are typically MORE effective than GridSearchCV while being faster and less likely to timeout.",
                 ]
         prompt["Instructions"] |= self._prompt_impl_guideline
@@ -287,13 +289,14 @@ class Agent:
 
     def _debug(self, parent_node: Node) -> Node:
         # Check if this is a hyperparameter tuning requirement issue
-        # Only enforce during first 1/3 of time limit
+        # Only enforce during first 1/4 of time limit for short timeouts, 1/3 for longer
         elapsed_time = time.time() - self.start_time
         time_limit_secs = self.acfg.time_limit if self.acfg.time_limit else float('inf')
+        disable_threshold = (time_limit_secs / 4.0) if time_limit_secs < 1200 else (time_limit_secs / 3.0)
         is_tuning_issue = False
         if (
             self.acfg.require_hyperparameter_tuning
-            and elapsed_time < (time_limit_secs / 3.0)
+            and elapsed_time < disable_threshold
             and parent_node.exc_type is None
             and "Missing hyperparameter tuning" in (parent_node.analysis or "")
         ):
@@ -317,9 +320,9 @@ class Agent:
                 "**The previous solution is missing hyperparameter tuning/optimization.**",
                 "You MUST add systematic hyperparameter tuning to the solution. This includes:",
                 "- **PREFER RandomizedSearchCV, Optuna, or hyperopt over GridSearchCV**",
-                "  * RandomizedSearchCV (n_iter=10-20) is often MORE effective than GridSearchCV while being much faster",
-                "  * **CRITICAL: Use ONLY 3 CV folds and limit n_iter to 10-20 to avoid timeouts**",
-                "  * Optuna (n_trials=10-20) uses Bayesian optimization and is typically the most effective method",
+                "  * RandomizedSearchCV (n_iter=5-10) is often MORE effective than GridSearchCV while being much faster",
+                "  * **CRITICAL: Use ONLY 3 CV folds and limit n_iter to 5-10 to avoid timeouts. Time is very limited!**",
+                "  * Optuna (n_trials=5-10) uses Bayesian optimization and is typically the most effective method",
                 "  * GridSearchCV can be too slow and cause timeouts, especially with large parameter spaces",
                 "- Systematic exploration of hyperparameter space (learning rate, regularization, tree depth, batch size, etc.)",
                 "- Cross-validation with parameter search (use ONLY 3 folds to avoid timeouts)",
@@ -436,12 +439,14 @@ class Agent:
         )
 
         # Check for hyperparameter tuning if required and execution succeeded
-        # Disable enforcement after 1/3 of time limit to allow completion
+        # Disable enforcement after 1/4 of time limit to allow completion (earlier for short timeouts)
         elapsed_time = time.time() - self.start_time
         time_limit_secs = self.acfg.time_limit if self.acfg.time_limit else float('inf')
+        # For short timeouts (< 20 min), disable after 1/4. For longer, use 1/3
+        disable_threshold = (time_limit_secs / 4.0) if time_limit_secs < 1200 else (time_limit_secs / 3.0)
         enforce_tuning = (
             self.acfg.require_hyperparameter_tuning 
-            and elapsed_time < (time_limit_secs / 3.0)
+            and elapsed_time < disable_threshold
         )
         
         if (
@@ -462,12 +467,13 @@ class Agent:
                 )
         elif (
             self.acfg.require_hyperparameter_tuning 
-            and elapsed_time >= (time_limit_secs / 3.0)
+            and elapsed_time >= disable_threshold
             and not hasattr(self, '_tuning_disabled_logged')
         ):
+            threshold_pct = "1/4" if time_limit_secs < 1200 else "1/3"
             logger.info(
                 f"Hyperparameter tuning enforcement disabled after {elapsed_time:.1f}s "
-                f"(1/3 of {time_limit_secs}s time limit) to allow completion"
+                f"({threshold_pct} of {time_limit_secs}s time limit) to allow completion"
             )
             self._tuning_disabled_logged = True
 
