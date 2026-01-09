@@ -223,7 +223,8 @@ class Agent:
         if self.acfg.require_hyperparameter_tuning and elapsed_time < (time_limit_secs / 3.0):
             prompt["Instructions"]["Hyperparameter tuning note"] = [
                 "Note: This solution will need hyperparameter tuning in later iterations.",
-                "When adding hyperparameter tuning, prefer RandomizedSearchCV (n_iter=20-50) or Optuna (n_trials=20-50).",
+                "When adding hyperparameter tuning, prefer RandomizedSearchCV (n_iter=10-20) or Optuna (n_trials=10-20).",
+                "**CRITICAL: Use ONLY 3 CV folds and limit n_iter to 10-20 to avoid timeouts.**",
                 "These methods are typically more effective than GridSearchCV while being faster and less likely to timeout.",
             ]
         prompt["Instructions"] |= self._prompt_impl_guideline
@@ -271,9 +272,9 @@ class Agent:
             if not has_tuning:
                 prompt["Instructions"]["Hyperparameter tuning requirement"] = [
                     "**IMPORTANT: The previous solution is missing hyperparameter tuning.**",
-                    "If improving the model, consider adding hyperparameter tuning using RandomizedSearchCV (n_iter=20-50) or Optuna (n_trials=20-50).",
+                    "If improving the model, consider adding hyperparameter tuning using RandomizedSearchCV (n_iter=10-20) or Optuna (n_trials=10-20).",
+                    "**CRITICAL: Use ONLY 3 CV folds and limit n_iter to 10-20 to avoid timeouts.**",
                     "These methods are typically MORE effective than GridSearchCV while being faster and less likely to timeout.",
-                    "Limit the search space and use 3-5 CV folds to balance speed and reliability.",
                 ]
         prompt["Instructions"] |= self._prompt_impl_guideline
 
@@ -316,11 +317,12 @@ class Agent:
                 "**The previous solution is missing hyperparameter tuning/optimization.**",
                 "You MUST add systematic hyperparameter tuning to the solution. This includes:",
                 "- **PREFER RandomizedSearchCV, Optuna, or hyperopt over GridSearchCV**",
-                "  * RandomizedSearchCV (n_iter=20-50) is often MORE effective than GridSearchCV while being much faster",
-                "  * Optuna (n_trials=20-50) uses Bayesian optimization and is typically the most effective method",
+                "  * RandomizedSearchCV (n_iter=10-20) is often MORE effective than GridSearchCV while being much faster",
+                "  * **CRITICAL: Use ONLY 3 CV folds and limit n_iter to 10-20 to avoid timeouts**",
+                "  * Optuna (n_trials=10-20) uses Bayesian optimization and is typically the most effective method",
                 "  * GridSearchCV can be too slow and cause timeouts, especially with large parameter spaces",
                 "- Systematic exploration of hyperparameter space (learning rate, regularization, tree depth, batch size, etc.)",
-                "- Cross-validation with parameter search (use 3-5 folds to balance speed and reliability)",
+                "- Cross-validation with parameter search (use ONLY 3 folds to avoid timeouts)",
                 "- Limit the search space to avoid timeouts - focus on the most important hyperparameters",
                 "- The solution should NOT be accepted without proper hyperparameter tuning.",
             ]
