@@ -1,5 +1,6 @@
 import logging
 import random
+import time
 from typing import Any, Callable, cast
 
 import humanize
@@ -76,6 +77,7 @@ class Agent:
         self.acfg = cfg.agent
         self.journal = journal
         self.data_preview: str | None = None
+        self.start_time = time.time()  # Track start time for time-based enforcement
 
     def search_policy(self) -> Node | None:
         """Select a node to work on (or None to draft a new node)."""
@@ -142,7 +144,7 @@ class Agent:
             "Your response should only contain a single code block.",
             f"Be aware of the running time of the code, it should complete within {humanize.naturaldelta(self.cfg.exec.timeout)}.",
             'All the provided input data is stored in "./input" directory.',
-            '**If there is test data provided for this task, please save the test predictions in a `submission.csv` file in the "./working" directory as described in the task description** This is extremely important since this file is used for grading/evaluation. DO NOT FORGET THE submission.csv file!',
+            '**If there is test data provided for this task, please save the test predictions in a `submission.csv` file in the "./working" directory as described in the task description. Alternatively, you can save it to "./best_submission/submission.csv" if that directory exists.** This is extremely important since this file is used for grading/evaluation. DO NOT FORGET THE submission.csv file!',
             'You can also use the "./working" directory to store any temporary files that your code needs to create.',
         ]
         if self.acfg.expose_prediction:
@@ -214,6 +216,16 @@ class Agent:
                 "The data is already prepared and available in the `./input` directory. There is no need to unzip any files.",
             ],
         }
+        # Add hyperparameter tuning guidance if required
+        # Only enforce during first 1/3 of time limit
+        elapsed_time = time.time() - self.start_time
+        time_limit_secs = self.acfg.time_limit if self.acfg.time_limit else float('inf')
+        if self.acfg.require_hyperparameter_tuning and elapsed_time < (time_limit_secs / 3.0):
+            prompt["Instructions"]["Hyperparameter tuning note"] = [
+                "Note: This solution will need hyperparameter tuning in later iterations.",
+                "When adding hyperparameter tuning, prefer RandomizedSearchCV (n_iter=20-50) or Optuna (n_trials=20-50).",
+                "These methods are typically more effective than GridSearchCV while being faster and less likely to timeout.",
+            ]
         prompt["Instructions"] |= self._prompt_impl_guideline
         prompt["Instructions"] |= self._prompt_environment
 
@@ -250,6 +262,19 @@ class Agent:
                 "Don't suggest to do EDA.",
             ],
         }
+        # Add hyperparameter tuning guidance if required and not present
+        # Only enforce during first 1/3 of time limit
+        elapsed_time = time.time() - self.start_time
+        time_limit_secs = self.acfg.time_limit if self.acfg.time_limit else float('inf')
+        if self.acfg.require_hyperparameter_tuning and elapsed_time < (time_limit_secs / 3.0):
+            has_tuning, _ = self._has_hyperparameter_tuning(parent_node.code)
+            if not has_tuning:
+                prompt["Instructions"]["Hyperparameter tuning requirement"] = [
+                    "**IMPORTANT: The previous solution is missing hyperparameter tuning.**",
+                    "If improving the model, consider adding hyperparameter tuning using RandomizedSearchCV (n_iter=20-50) or Optuna (n_trials=20-50).",
+                    "These methods are typically MORE effective than GridSearchCV while being faster and less likely to timeout.",
+                    "Limit the search space and use 3-5 CV folds to balance speed and reliability.",
+                ]
         prompt["Instructions"] |= self._prompt_impl_guideline
 
         plan, code = self.plan_and_code_query(prompt)
@@ -261,9 +286,13 @@ class Agent:
 
     def _debug(self, parent_node: Node) -> Node:
         # Check if this is a hyperparameter tuning requirement issue
+        # Only enforce during first 1/3 of time limit
+        elapsed_time = time.time() - self.start_time
+        time_limit_secs = self.acfg.time_limit if self.acfg.time_limit else float('inf')
         is_tuning_issue = False
         if (
             self.acfg.require_hyperparameter_tuning
+            and elapsed_time < (time_limit_secs / 3.0)
             and parent_node.exc_type is None
             and "Missing hyperparameter tuning" in (parent_node.analysis or "")
         ):
@@ -286,9 +315,13 @@ class Agent:
             prompt["Instructions"]["Critical requirement"] = [
                 "**The previous solution is missing hyperparameter tuning/optimization.**",
                 "You MUST add systematic hyperparameter tuning to the solution. This includes:",
-                "- Using GridSearchCV, RandomizedSearchCV, Optuna, hyperopt, or similar optimization libraries",
+                "- **PREFER RandomizedSearchCV, Optuna, or hyperopt over GridSearchCV**",
+                "  * RandomizedSearchCV (n_iter=20-50) is often MORE effective than GridSearchCV while being much faster",
+                "  * Optuna (n_trials=20-50) uses Bayesian optimization and is typically the most effective method",
+                "  * GridSearchCV can be too slow and cause timeouts, especially with large parameter spaces",
                 "- Systematic exploration of hyperparameter space (learning rate, regularization, tree depth, batch size, etc.)",
-                "- Cross-validation with parameter search",
+                "- Cross-validation with parameter search (use 3-5 folds to balance speed and reliability)",
+                "- Limit the search space to avoid timeouts - focus on the most important hyperparameters",
                 "- The solution should NOT be accepted without proper hyperparameter tuning.",
             ]
         
@@ -401,8 +434,16 @@ class Agent:
         )
 
         # Check for hyperparameter tuning if required and execution succeeded
+        # Disable enforcement after 1/3 of time limit to allow completion
+        elapsed_time = time.time() - self.start_time
+        time_limit_secs = self.acfg.time_limit if self.acfg.time_limit else float('inf')
+        enforce_tuning = (
+            self.acfg.require_hyperparameter_tuning 
+            and elapsed_time < (time_limit_secs / 3.0)
+        )
+        
         if (
-            self.acfg.require_hyperparameter_tuning
+            enforce_tuning
             and not node.is_buggy
             and response["metric"] is not None
         ):
@@ -417,6 +458,16 @@ class Agent:
                     f"{node.analysis}\n\n"
                     f"**Missing hyperparameter tuning**: {tuning_explanation}"
                 )
+        elif (
+            self.acfg.require_hyperparameter_tuning 
+            and elapsed_time >= (time_limit_secs / 3.0)
+            and not hasattr(self, '_tuning_disabled_logged')
+        ):
+            logger.info(
+                f"Hyperparameter tuning enforcement disabled after {elapsed_time:.1f}s "
+                f"(1/3 of {time_limit_secs}s time limit) to allow completion"
+            )
+            self._tuning_disabled_logged = True
 
         if node.is_buggy:
             node.metric = WorstMetricValue()
