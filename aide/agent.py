@@ -16,64 +16,36 @@ from .utils.response import extract_code, extract_text_up_to_code, wrap_code
 logger = logging.getLogger("aide")
 
 def _has_hyperparameter_tuning(code: str) -> bool:
-    keywords = [
-        # sklearn search APIs
+    tuning_keywords = [
+        # sklearn search
         "GridSearchCV",
         "RandomizedSearchCV",
-        "BayesSearchCV",
+        "ParameterGrid",
+        "ParameterSampler",
+        "best_params_",
+        "best_estimator_",
 
-        # optuna / bayesian optimization
+        # optuna / bayesian
         "optuna",
-        "Optuna",
         "trial.suggest",
         "study.optimize",
-        "create_study",
 
         # hyperopt
         "hyperopt",
         "fmin(",
         "hp.",
-        "tpe.suggest",
 
-        # cross-validation / folds (often paired with tuning)
-        "cross_val_score(",
-        "cross_validate(",
-        "KFold(",
-        "StratifiedKFold(",
-        "GroupKFold(",
-
-        # parameter grids / loops
-        "ParameterGrid",
-        "ParameterSampler",
-        "param_grid",
-        "param_distributions",
-
-        # common manual tuning patterns
+        # explicit parameter loops
+        "for param in",
         "for lr in",
         "for learning_rate in",
-        "for n_estimators in",
         "for max_depth in",
+        "for n_estimators in",
         "for num_leaves in",
-        "for min_child_samples in",
-
-        # model re-instantiation with varying params
-        "best_params",
-        "best_score",
-        "best_model",
-        "best_estimator_",
-
-        # LightGBM / XGBoost specific tuning patterns
-        "lgb.train(",
-        "xgb.train(",
-        "early_stopping_rounds",
-        "cv(",
-
-        # sklearn pipeline + search
-        "Pipeline(",
-        "make_pipeline(",
     ]
 
-    return any(k in code for k in keywords)
+    return any(k in code for k in tuning_keywords)
+
 
 
 def format_time(time_in_sec: int):
