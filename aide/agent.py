@@ -256,8 +256,7 @@ class Agent:
         prompt["Instructions"] |= self._prompt_resp_fmt
         prompt["Instructions"] |= {
             "Solution sketch guideline": [
-                "This first solution design should be relatively simple, without ensembling.",
-                "However, the code MUST include hyperparameter tuning (e.g., GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, or manual loops searching over ≥2 values for ≥1 hyperparameter).",
+                "This first solution design should be relatively simple, without ensembling or hyper-parameter optimization.",
                 "Take the Memory section into consideration when proposing the design,"
                 " don't propose the same modelling solution but keep the evaluation the same.",
                 "The solution sketch should be 3-5 sentences.",
