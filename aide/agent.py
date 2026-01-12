@@ -20,38 +20,30 @@ def _has_hyperparameter_tuning_llm(code: str) -> bool:
     Uses an LLM to judge whether the code performs real hyperparameter tuning.
     Returns True only if tuning is explicit and substantive.
     """
-    prompt = {
-        "role": "system",
-        "content": (
-            "You are a strict ML code reviewer.\n"
-            "Determine whether the following Python code performs REAL hyperparameter tuning.\n\n"
-            "Hyperparameter tuning means:\n"
-            "- Explicit search over ≥2 values for ≥1 hyperparameter\n"
-            "- Using GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, Bayesian optimization, or manual loops\n\n"
-            "DO NOT count:\n"
-            "- cross_val_score alone\n"
-            "- fixed hyperparameters\n"
-            "- train/val splits without search\n\n"
-            "Respond ONLY with 'YES' or 'NO'."
-        ),
-    }
+    system_prompt = (
+        "You are a strict ML code reviewer.\n"
+        "Determine whether the following Python code performs REAL hyperparameter tuning.\n\n"
+        "Hyperparameter tuning means:\n"
+        "- Explicit search over ≥2 values for ≥1 hyperparameter\n"
+        "- Using GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, Bayesian optimization, or manual loops\n\n"
+        "DO NOT count:\n"
+        "- cross_val_score alone\n"
+        "- fixed hyperparameters\n"
+        "- train/val splits without search\n\n"
+        "Respond ONLY with 'YES' or 'NO'."
+    )
 
-    user = {
-        "role": "user",
-        "content": f"```python\n{code}\n```",
-    }
+    user_prompt = f"thon\n{code}\n```"
 
     resp = query(
-        system_message=prompt,
-        user_message=user,
-        model="gpt-4o-2024-08-06",  # same as your agent
+        system_message=system_prompt,  # Pass as string, not dict
+        user_message=user_prompt,  # Pass as string, not dict
+        model="gpt-4o-2024-08-06",
         temperature=0,
         convert_system_to_user=False,
     )
 
     return "YES" in resp.upper()
-
-
 
 def format_time(time_in_sec: int):
     return f"{time_in_sec // 3600}hrs {(time_in_sec % 3600) // 60}mins {time_in_sec % 60}secs"
