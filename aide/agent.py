@@ -483,7 +483,7 @@ class Agent:
         )
         # Enforce hyperparameter tuning AFTER execution
         if not node.is_buggy:
-            if not _has_hyperparameter_tuning(node.code):
+            if not _has_hyperparameter_tuning_llm(node.code):
                 logger.info(
                     f"Node {node.id} rejected: missing hyperparameter tuning"
                 )
