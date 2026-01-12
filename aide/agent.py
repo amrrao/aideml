@@ -15,36 +15,41 @@ from .utils.response import extract_code, extract_text_up_to_code, wrap_code
 
 logger = logging.getLogger("aide")
 
-def _has_hyperparameter_tuning(code: str) -> bool:
-    tuning_keywords = [
-        # sklearn search
-        "GridSearchCV",
-        "RandomizedSearchCV",
-        "ParameterGrid",
-        "ParameterSampler",
-        "best_params_",
-        "best_estimator_",
+def _has_hyperparameter_tuning_llm(code: str) -> bool:
+    """
+    Uses an LLM to judge whether the code performs real hyperparameter tuning.
+    Returns True only if tuning is explicit and substantive.
+    """
+    prompt = {
+        "role": "system",
+        "content": (
+            "You are a strict ML code reviewer.\n"
+            "Determine whether the following Python code performs REAL hyperparameter tuning.\n\n"
+            "Hyperparameter tuning means:\n"
+            "- Explicit search over ≥2 values for ≥1 hyperparameter\n"
+            "- Using GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, Bayesian optimization, or manual loops\n\n"
+            "DO NOT count:\n"
+            "- cross_val_score alone\n"
+            "- fixed hyperparameters\n"
+            "- train/val splits without search\n\n"
+            "Respond ONLY with 'YES' or 'NO'."
+        ),
+    }
 
-        # optuna / bayesian
-        "optuna",
-        "trial.suggest",
-        "study.optimize",
+    user = {
+        "role": "user",
+        "content": f"```python\n{code}\n```",
+    }
 
-        # hyperopt
-        "hyperopt",
-        "fmin(",
-        "hp.",
+    resp = query(
+        system_message=prompt,
+        user_message=user,
+        model="gpt-4o-2024-08-06",  # same as your agent
+        temperature=0,
+        convert_system_to_user=False,
+    )
 
-        # explicit parameter loops
-        "for param in",
-        "for lr in",
-        "for learning_rate in",
-        "for max_depth in",
-        "for n_estimators in",
-        "for num_leaves in",
-    ]
-
-    return any(k in code for k in tuning_keywords)
+    return "YES" in resp.upper()
 
 
 
