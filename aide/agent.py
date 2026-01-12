@@ -256,7 +256,8 @@ class Agent:
         prompt["Instructions"] |= self._prompt_resp_fmt
         prompt["Instructions"] |= {
             "Solution sketch guideline": [
-                "This first solution design should be relatively simple, without ensembling or hyper-parameter optimization.",
+                "This first solution design should be relatively simple, without ensembling.",
+                "However, the code MUST include hyperparameter tuning (e.g., GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, or manual loops searching over ≥2 values for ≥1 hyperparameter).",
                 "Take the Memory section into consideration when proposing the design,"
                 " don't propose the same modelling solution but keep the evaluation the same.",
                 "The solution sketch should be 3-5 sentences.",
@@ -343,11 +344,19 @@ class Agent:
             "Instructions": {},
         }
         prompt["Instructions"] |= self._prompt_resp_fmt
+        bugfix_guidelines = [
+            "You should write a brief natural language description (3-5 sentences) of how the issue in the previous implementation can be fixed.",
+            "Don't suggest to do EDA.",
+        ]
+        
+        # Check if the rejection was due to missing hyperparameter tuning
+        if parent_node.analysis and "missing hyperparameter tuning" in parent_node.analysis.lower():
+            bugfix_guidelines.insert(1, 
+                "**CRITICAL: The previous solution was rejected for missing hyperparameter tuning. You MUST add hyperparameter tuning** (e.g., GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, or manual loops searching over ≥2 values for ≥1 hyperparameter). This is required for the solution to be accepted."
+            )
+        
         prompt["Instructions"] |= {
-            "Bugfix improvement sketch guideline": [
-                "You should write a brief natural language description (3-5 sentences) of how the issue in the previous implementation can be fixed.",
-                "Don't suggest to do EDA.",
-            ],
+            "Bugfix improvement sketch guideline": bugfix_guidelines,
         }
         prompt["Instructions"] |= self._prompt_impl_guideline
 
