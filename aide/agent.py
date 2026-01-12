@@ -33,7 +33,7 @@ def _has_hyperparameter_tuning_llm(code: str) -> bool:
         "Respond ONLY with 'YES' or 'NO'."
     )
 
-    user_prompt = f"thon\n{code}\n```"
+    user_prompt = f"```python\n{code}\n```"
 
     resp = query(
         system_message=system_prompt,  # Pass as string, not dict
@@ -307,6 +307,7 @@ class Agent:
                 "You should be very specific and should only propose a single actionable improvement.",
                 "This improvement should be atomic so that we can experimentally evaluate the effect of the proposed change.",
                 "Take the Memory section into consideration when proposing the improvement.",
+                "**IMPORTANT: If the previous solution does not include hyperparameter tuning, you MUST add it** (e.g., GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, or manual loops searching over ≥2 values for ≥1 hyperparameter).",
                 "The solution sketch should be 3-5 sentences.",
                 "Don't suggest to do EDA.",
             ],
@@ -475,7 +476,10 @@ class Agent:
         )
         # Enforce hyperparameter tuning AFTER execution
         if not node.is_buggy:
-            if not _has_hyperparameter_tuning_llm(node.code):
+            logger.info(f"Checking hyperparameter tuning for node {node.id}")
+            has_tuning = _has_hyperparameter_tuning_llm(node.code)
+            logger.info(f"Node {node.id} hyperparameter tuning check result: {has_tuning}")
+            if not has_tuning:
                 logger.info(
                     f"Node {node.id} rejected: missing hyperparameter tuning"
                 )
