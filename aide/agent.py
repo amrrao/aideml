@@ -15,6 +15,66 @@ from .utils.response import extract_code, extract_text_up_to_code, wrap_code
 
 logger = logging.getLogger("aide")
 
+def _has_hyperparameter_tuning(code: str) -> bool:
+    keywords = [
+        # sklearn search APIs
+        "GridSearchCV",
+        "RandomizedSearchCV",
+        "BayesSearchCV",
+
+        # optuna / bayesian optimization
+        "optuna",
+        "Optuna",
+        "trial.suggest",
+        "study.optimize",
+        "create_study",
+
+        # hyperopt
+        "hyperopt",
+        "fmin(",
+        "hp.",
+        "tpe.suggest",
+
+        # cross-validation / folds (often paired with tuning)
+        "cross_val_score(",
+        "cross_validate(",
+        "KFold(",
+        "StratifiedKFold(",
+        "GroupKFold(",
+
+        # parameter grids / loops
+        "ParameterGrid",
+        "ParameterSampler",
+        "param_grid",
+        "param_distributions",
+
+        # common manual tuning patterns
+        "for lr in",
+        "for learning_rate in",
+        "for n_estimators in",
+        "for max_depth in",
+        "for num_leaves in",
+        "for min_child_samples in",
+
+        # model re-instantiation with varying params
+        "best_params",
+        "best_score",
+        "best_model",
+        "best_estimator_",
+
+        # LightGBM / XGBoost specific tuning patterns
+        "lgb.train(",
+        "xgb.train(",
+        "early_stopping_rounds",
+        "cv(",
+
+        # sklearn pipeline + search
+        "Pipeline(",
+        "make_pipeline(",
+    ]
+
+    return any(k in code for k in keywords)
+
 
 def format_time(time_in_sec: int):
     return f"{time_in_sec // 3600}hrs {(time_in_sec % 3600) // 60}mins {time_in_sec % 60}secs"
@@ -444,6 +504,17 @@ class Agent:
             or response["has_csv_submission"] == False
             or has_csv_submission == False
         )
+        # Enforce hyperparameter tuning AFTER execution
+        if not node.is_buggy:
+            if not _has_hyperparameter_tuning(node.code):
+                logger.info(
+                    f"Node {node.id} rejected: missing hyperparameter tuning"
+                )
+                node.is_buggy = True
+                node.metric = WorstMetricValue()
+                node.analysis += "\nRejected: missing hyperparameter tuning."
+                return node
+
 
         if node.is_buggy:
             logger.info(
