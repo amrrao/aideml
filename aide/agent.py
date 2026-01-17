@@ -15,35 +15,36 @@ from .utils.response import extract_code, extract_text_up_to_code, wrap_code
 
 logger = logging.getLogger("aide")
 
-def _has_hyperparameter_tuning_llm(code: str) -> bool:
-    """
-    Uses an LLM to judge whether the code performs real hyperparameter tuning.
-    Returns True only if tuning is explicit and substantive.
-    """
-    system_prompt = (
-        "You are a strict ML code reviewer.\n"
-        "Determine whether the following Python code performs REAL hyperparameter tuning.\n\n"
-        "Hyperparameter tuning means:\n"
-        "- Explicit search over ≥2 values for ≥1 hyperparameter\n"
-        "- Using GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, Bayesian optimization, or manual loops\n\n"
-        "DO NOT count:\n"
-        "- cross_val_score alone\n"
-        "- fixed hyperparameters\n"
-        "- train/val splits without search\n\n"
-        "Respond ONLY with 'YES' or 'NO'."
-    )
-
-    user_prompt = f"```python\n{code}\n```"
-
-    resp = query(
-        system_message=system_prompt,  # Pass as string, not dict
-        user_message=user_prompt,  # Pass as string, not dict
-        model="gpt-4o-2024-08-06",
-        temperature=0,
-        convert_system_to_user=False,
-    )
-
-    return "YES" in resp.upper()
+# Commented out: Hyperparameter tuning enforcement
+# def _has_hyperparameter_tuning_llm(code: str) -> bool:
+#     """
+#     Uses an LLM to judge whether the code performs real hyperparameter tuning.
+#     Returns True only if tuning is explicit and substantive.
+#     """
+#     system_prompt = (
+#         "You are a strict ML code reviewer.\n"
+#         "Determine whether the following Python code performs REAL hyperparameter tuning.\n\n"
+#         "Hyperparameter tuning means:\n"
+#         "- Explicit search over ≥2 values for ≥1 hyperparameter\n"
+#         "- Using GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, Bayesian optimization, or manual loops\n\n"
+#         "DO NOT count:\n"
+#         "- cross_val_score alone\n"
+#         "- fixed hyperparameters\n"
+#         "- train/val splits without search\n\n"
+#         "Respond ONLY with 'YES' or 'NO'."
+#     )
+#
+#     user_prompt = f"```python\n{code}\n```"
+#
+#     resp = query(
+#         system_message=system_prompt,  # Pass as string, not dict
+#         user_message=user_prompt,  # Pass as string, not dict
+#         model="gpt-4o-2024-08-06",
+#         temperature=0,
+#         convert_system_to_user=False,
+#     )
+#
+#     return "YES" in resp.upper()
 
 def format_time(time_in_sec: int):
     return f"{time_in_sec // 3600}hrs {(time_in_sec % 3600) // 60}mins {time_in_sec % 60}secs"
@@ -307,7 +308,8 @@ class Agent:
                 "You should be very specific and should only propose a single actionable improvement.",
                 "This improvement should be atomic so that we can experimentally evaluate the effect of the proposed change.",
                 "Take the Memory section into consideration when proposing the improvement.",
-                "**IMPORTANT: If the previous solution does not include hyperparameter tuning, you MUST add it** (e.g., GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, or manual loops searching over ≥2 values for ≥1 hyperparameter).",
+                # Commented out: Hyperparameter tuning enforcement
+                # "**IMPORTANT: If the previous solution does not include hyperparameter tuning, you MUST add it** (e.g., GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, or manual loops searching over ≥2 values for ≥1 hyperparameter).",
                 "The solution sketch should be 3-5 sentences.",
                 "Don't suggest to do EDA.",
             ],
@@ -348,11 +350,12 @@ class Agent:
             "Don't suggest to do EDA.",
         ]
         
-        # Check if the rejection was due to missing hyperparameter tuning
-        if parent_node.analysis and "missing hyperparameter tuning" in parent_node.analysis.lower():
-            bugfix_guidelines.insert(1, 
-                "**CRITICAL: The previous solution was rejected for missing hyperparameter tuning. You MUST add hyperparameter tuning** (e.g., GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, or manual loops searching over ≥2 values for ≥1 hyperparameter). This is required for the solution to be accepted."
-            )
+        # Commented out: Hyperparameter tuning enforcement
+        # # Check if the rejection was due to missing hyperparameter tuning
+        # if parent_node.analysis and "missing hyperparameter tuning" in parent_node.analysis.lower():
+        #     bugfix_guidelines.insert(1, 
+        #         "**CRITICAL: The previous solution was rejected for missing hyperparameter tuning. You MUST add hyperparameter tuning** (e.g., GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, or manual loops searching over ≥2 values for ≥1 hyperparameter). This is required for the solution to be accepted."
+        #     )
         
         prompt["Instructions"] |= {
             "Bugfix improvement sketch guideline": bugfix_guidelines,
@@ -482,19 +485,20 @@ class Agent:
             or response["has_csv_submission"] == False
             or has_csv_submission == False
         )
-        # Enforce hyperparameter tuning AFTER execution
-        if not node.is_buggy:
-            logger.info(f"Checking hyperparameter tuning for node {node.id}")
-            has_tuning = _has_hyperparameter_tuning_llm(node.code)
-            logger.info(f"Node {node.id} hyperparameter tuning check result: {has_tuning}")
-            if not has_tuning:
-                logger.info(
-                    f"Node {node.id} rejected: missing hyperparameter tuning"
-                )
-                node.is_buggy = True
-                node.metric = WorstMetricValue()
-                node.analysis += "\nRejected: missing hyperparameter tuning."
-                return node
+        # Commented out: Hyperparameter tuning enforcement
+        # # Enforce hyperparameter tuning AFTER execution
+        # if not node.is_buggy:
+        #     logger.info(f"Checking hyperparameter tuning for node {node.id}")
+        #     has_tuning = _has_hyperparameter_tuning_llm(node.code)
+        #     logger.info(f"Node {node.id} hyperparameter tuning check result: {has_tuning}")
+        #     if not has_tuning:
+        #         logger.info(
+        #             f"Node {node.id} rejected: missing hyperparameter tuning"
+        #         )
+        #         node.is_buggy = True
+        #         node.metric = WorstMetricValue()
+        #         node.analysis += "\nRejected: missing hyperparameter tuning."
+        #         return node
 
 
         if node.is_buggy:
