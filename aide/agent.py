@@ -15,39 +15,176 @@ from .utils.response import extract_code, extract_text_up_to_code, wrap_code
 
 logger = logging.getLogger("aide")
 
-# Commented out: Hyperparameter tuning enforcement
-# def _has_hyperparameter_tuning_llm(code: str) -> bool:
-#     """
-#     Uses an LLM to judge whether the code performs real hyperparameter tuning.
-#     Returns True only if tuning is explicit and substantive.
-#     """
-#     system_prompt = (
-#         "You are a strict ML code reviewer.\n"
-#         "Determine whether the following Python code performs REAL hyperparameter tuning.\n\n"
-#         "Hyperparameter tuning means:\n"
-#         "- Explicit search over ≥2 values for ≥1 hyperparameter\n"
-#         "- Using GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, Bayesian optimization, or manual loops\n\n"
-#         "DO NOT count:\n"
-#         "- cross_val_score alone\n"
-#         "- fixed hyperparameters\n"
-#         "- train/val splits without search\n\n"
-#         "Respond ONLY with 'YES' or 'NO'."
-#     )
-#
-#     user_prompt = f"```python\n{code}\n```"
-#
-#     resp = query(
-#         system_message=system_prompt,  # Pass as string, not dict
-#         user_message=user_prompt,  # Pass as string, not dict
-#         model="gpt-4o-2024-08-06",
-#         temperature=0,
-#         convert_system_to_user=False,
-#     )
-#
-#     return "YES" in resp.upper()
+hpo_scoring_func_spec = FunctionSpec(
+    name="score_hyperparameter_tuning",
+    json_schema={
+        "type": "object",
+        "properties": {
+            "score": {
+                "type": "integer",
+                "description": "Score the quality of hyperparameter tuning on a 0-3 scale: "
+                "0 = none (no hyperparameter tuning), "
+                "1 = superficial (minimal tuning, e.g., only 2-3 values tested), "
+                "2 = moderate (reasonable tuning with multiple hyperparameters or systematic search), "
+                "3 = extensive (comprehensive tuning with multiple hyperparameters, systematic search, and proper validation).",
+                "minimum": 0,
+                "maximum": 3,
+            },
+        },
+        "required": ["score"],
+    },
+    description="Score the quality of hyperparameter tuning in the code.",
+)
+
+
+def _score_hyperparameter_tuning(code: str) -> int:
+    """
+    Evaluates the quality of hyperparameter tuning on a 0-3 scale using LLM.
+    
+    Returns:
+        0 = none (no hyperparameter tuning)
+        1 = superficial (minimal tuning)
+        2 = moderate (reasonable tuning)
+        3 = extensive (comprehensive tuning)
+    """
+    system_prompt = (
+        "You are a strict ML code reviewer evaluating hyperparameter tuning quality.\n"
+        "Score the hyperparameter tuning in the following Python code on a 0-3 scale:\n\n"
+        "0 = none: No hyperparameter tuning (only fixed/default hyperparameters)\n"
+        "1 = superficial: Minimal tuning (e.g., only 2-3 values tested for 1 hyperparameter, "
+        "or very small grid/random search with <5 iterations)\n"
+        "2 = moderate: Reasonable tuning (multiple hyperparameters tested, systematic search "
+        "with ≥5 iterations, proper validation)\n"
+        "3 = extensive: Comprehensive tuning (multiple hyperparameters, systematic search "
+        "with ≥10 iterations, proper validation, best params reused for final training)\n\n"
+        "DO NOT count:\n"
+        "- cross_val_score alone without hyperparameter search\n"
+        "- fixed hyperparameters\n"
+        "- train/val splits without search\n"
+        "- hyperparameter tuning that is not used in final model training\n\n"
+        "Respond with ONLY the integer score (0, 1, 2, or 3)."
+    )
+
+    user_prompt = f"```python\n{code}\n```"
+
+    try:
+        resp = query(
+            system_message=system_prompt,
+            user_message=user_prompt,
+            func_spec=hpo_scoring_func_spec,
+            model="gpt-4o-2024-08-06",
+            temperature=0,
+            convert_system_to_user=False,
+        )
+        score = int(resp.get("score", 0))
+        return max(0, min(3, score))  # Clamp to [0, 3]
+    except Exception as e:
+        logger.warning(f"HPO scoring failed: {e}, defaulting to 0")
+        return 0
 
 def format_time(time_in_sec: int):
     return f"{time_in_sec // 3600}hrs {(time_in_sec % 3600) // 60}mins {time_in_sec % 60}secs"
+
+
+def _apply_structural_hpo_caps(code: str, hpo_score: int) -> int:
+    """
+    Apply structural caps to prevent fake/weak HPO.
+    Returns the capped HPO score.
+    """
+    import re
+    
+    # Cap RandomizedSearchCV with n_iter < 5
+    randomized_search_pattern = r"RandomizedSearchCV\s*\([^)]*n_iter\s*=\s*(\d+)"
+    match = re.search(randomized_search_pattern, code, re.IGNORECASE)
+    if match:
+        n_iter = int(match.group(1))
+        if n_iter < 5:
+            hpo_score = min(hpo_score, 1)
+            logger.info(f"Capped HPO score to 1 due to RandomizedSearchCV with n_iter={n_iter} < 5")
+    
+    # Cap GridSearchCV with very small grids (check for parameter grids with < 3 values)
+    grid_search_pattern = r"GridSearchCV\s*\([^)]*param_grid\s*=\s*\{[^}]*\}"
+    if re.search(grid_search_pattern, code, re.IGNORECASE):
+        # Check if param_grid has very few values (simple heuristic: count colons in dict)
+        param_grid_pattern = r"param_grid\s*=\s*\{([^}]+)\}"
+        match = re.search(param_grid_pattern, code, re.IGNORECASE)
+        if match:
+            param_grid_content = match.group(1)
+            # Count list lengths (rough heuristic)
+            list_counts = len(re.findall(r"\[[^\]]+\]", param_grid_content))
+            if list_counts < 2 or (list_counts == 2 and all(len(re.findall(r"\[([^\]]+)\]", part)) < 3 for part in param_grid_content.split(","))):
+                hpo_score = min(hpo_score, 1)
+                logger.info(f"Capped HPO score to 1 due to very small grid search")
+    
+    # Check if best parameters are never reused for final training
+    # Look for pattern: search.fit() but no model with best_params_ or best_estimator_
+    has_search = re.search(r"(GridSearchCV|RandomizedSearchCV|Optuna|Hyperopt)", code, re.IGNORECASE)
+    if has_search:
+        # Check if best params are used in final training
+        has_best_params_usage = re.search(
+            r"(best_params_|best_estimator_|\.best_estimator|\.best_params)", code, re.IGNORECASE
+        )
+        if not has_best_params_usage:
+            hpo_score = min(hpo_score, 1)
+            logger.info(f"Capped HPO score to 1: best parameters not reused for final training")
+    
+    return hpo_score
+
+
+def _check_model_family_diversity(code: str) -> float:
+    """
+    Check model family diversity. Returns reward:
+    +0.1 for single focused model family
+    -0.1 for multiple model families/ensembles early
+    """
+    import re
+    
+    model_families = {
+        "tree": ["RandomForest", "DecisionTree", "ExtraTrees", "XGBoost", "LightGBM", "CatBoost", "GradientBoosting"],
+        "linear": ["LinearRegression", "LogisticRegression", "Ridge", "Lasso", "ElasticNet", "SGD"],
+        "neural": ["MLP", "NeuralNetwork", "Sequential", "torch.nn", "tf.keras"],
+        "svm": ["SVC", "SVR", "SVM"],
+        "naive_bayes": ["GaussianNB", "MultinomialNB", "BernoulliNB"],
+    }
+    
+    found_families = set()
+    for family, models in model_families.items():
+        for model in models:
+            if re.search(rf"\b{model}\b", code, re.IGNORECASE):
+                found_families.add(family)
+                break
+    
+    # Check for ensemble patterns
+    has_ensemble = re.search(r"(Voting|Stacking|Blending|ensemble)", code, re.IGNORECASE)
+    
+    if len(found_families) == 1 and not has_ensemble:
+        return 0.1  # Single focused model family
+    elif len(found_families) > 1 or has_ensemble:
+        return -0.1  # Multiple families or ensemble
+    return 0.0
+
+
+def _check_hpo_correctness(code: str, term_out: str) -> float:
+    """
+    Check if HPO is used correctly. Returns penalty if HPO is performed incorrectly.
+    """
+    import re
+    
+    has_hpo = re.search(r"(GridSearchCV|RandomizedSearchCV|Optuna|Hyperopt|hyperparameter)", code, re.IGNORECASE)
+    if not has_hpo:
+        return 0.0
+    
+    penalty = 0.0
+    
+    # Check if validation improves vs baseline (heuristic: look for metric improvements in output)
+    # This is a simple check - in practice, this would need more sophisticated analysis
+    if "best_score" in term_out.lower() or "best_params" in term_out.lower():
+        # If best params are found, check if they're used
+        if not re.search(r"(best_params_|best_estimator_|\.best_estimator)", code, re.IGNORECASE):
+            penalty -= 0.05
+            logger.info("HPO correctness penalty: best hyperparameters found but not reused")
+    
+    return penalty
 
 
 ExecCallbackType = Callable[[str, bool], ExecutionResult]
@@ -485,21 +622,18 @@ class Agent:
             or response["has_csv_submission"] == False
             or has_csv_submission == False
         )
-        # Commented out: Hyperparameter tuning enforcement
-        # # Enforce hyperparameter tuning AFTER execution
-        # if not node.is_buggy:
-        #     logger.info(f"Checking hyperparameter tuning for node {node.id}")
-        #     has_tuning = _has_hyperparameter_tuning_llm(node.code)
-        #     logger.info(f"Node {node.id} hyperparameter tuning check result: {has_tuning}")
-        #     if not has_tuning:
-        #         logger.info(
-        #             f"Node {node.id} rejected: missing hyperparameter tuning"
-        #         )
-        #         node.is_buggy = True
-        #         node.metric = WorstMetricValue()
-        #         node.analysis += "\nRejected: missing hyperparameter tuning."
-        #         return node
 
+        # HPO scoring (always done, regardless of buggy status)
+        logger.info(f"Scoring hyperparameter tuning for node {node.id}")
+        hpo_score = _score_hyperparameter_tuning(node.code)
+        logger.info(f"Node {node.id} initial HPO score: {hpo_score}")
+        
+        # Apply structural caps to prevent fake/weak HPO
+        hpo_score = _apply_structural_hpo_caps(node.code, hpo_score)
+        logger.info(f"Node {node.id} HPO score after structural caps: {hpo_score}")
+        
+        # Store HPO score on node
+        node.hpo_score = hpo_score
 
         if node.is_buggy:
             logger.info(
@@ -508,8 +642,72 @@ class Agent:
             node.metric = WorstMetricValue()
         else:
             logger.info(f"Parsed results: Node {node.id} is not buggy")
-            node.metric = MetricValue(
+            base_metric = MetricValue(
                 response["metric"], maximize=not response["lower_is_better"]
             )
+            
+            # Apply soft HPO reward shaping (curriculum-based)
+            progress_ratio = self.current_step / max(self.acfg.steps, 1)
+            hpo_reward = self._get_hpo_reward(hpo_score, progress_ratio)
+            
+            # Model family diversity reward
+            diversity_reward = _check_model_family_diversity(node.code)
+            
+            # HPO correctness penalty
+            correctness_penalty = _check_hpo_correctness(node.code, node.term_out)
+            
+            # Apply rewards/penalties to metric value
+            # We adjust the metric value by a small amount based on HPO quality
+            if base_metric.value is not None:
+                total_adjustment = hpo_reward + diversity_reward + correctness_penalty
+                # Scale adjustment based on metric magnitude (avoid overwhelming small metrics)
+                metric_scale = abs(base_metric.value) if abs(base_metric.value) > 0.01 else 1.0
+                adjusted_value = base_metric.value + (total_adjustment * metric_scale * 0.1)
+                
+                # Create adjusted metric (but keep original for logging)
+                node.metric = MetricValue(
+                    adjusted_value, maximize=base_metric.maximize
+                )
+                logger.info(
+                    f"Node {node.id} metric adjusted: base={base_metric.value:.6f}, "
+                    f"hpo_reward={hpo_reward:.3f}, diversity={diversity_reward:.3f}, "
+                    f"correctness={correctness_penalty:.3f}, final={adjusted_value:.6f}"
+                )
+            else:
+                node.metric = base_metric
 
         return node
+    
+    def _get_hpo_reward(self, hpo_score: int, progress_ratio: float) -> float:
+        """
+        Get HPO reward based on score and search progress (curriculum-style).
+        
+        Early search (0-40%): allow no/weak HPO, only apply penalties
+        Mid search (40-70%): reward score ≥2
+        Late search (70-100%): strongly reward score 3
+        """
+        if progress_ratio < 0.4:  # Early search
+            if hpo_score == 0:
+                return -0.3
+            elif hpo_score == 1:
+                return -0.1
+            else:
+                return 0.0  # No penalty for moderate/extensive HPO early
+        elif progress_ratio < 0.7:  # Mid search
+            if hpo_score == 0:
+                return -0.3
+            elif hpo_score == 1:
+                return -0.1
+            elif hpo_score >= 2:
+                return 0.15
+            return 0.0
+        else:  # Late search
+            if hpo_score == 0:
+                return -0.3
+            elif hpo_score == 1:
+                return -0.1
+            elif hpo_score == 2:
+                return 0.15
+            elif hpo_score == 3:
+                return 0.35
+            return 0.0

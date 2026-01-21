@@ -48,6 +48,8 @@ class Node(DataClassJsonMixin):
     # whether the agent decided that the code is buggy
     # -> always True if exc_type is not None or no valid metric
     is_buggy: bool = field(default=None, kw_only=True)  # type: ignore
+    # hyperparameter optimization score (0-3): 0=none, 1=superficial, 2=moderate, 3=extensive
+    hpo_score: int = field(default=0, kw_only=True)  # type: ignore
 
     def __post_init__(self) -> None:
         if self.parent is not None:
@@ -171,14 +173,32 @@ class Journal(DataClassJsonMixin):
         return [n.metric for n in self.nodes]
 
     def get_best_node(self, only_good=True) -> None | Node:
-        """Return the best solution found so far (node with the highest validation metric)."""
+        """
+        Return the best solution found so far (node with the highest validation metric).
+        HPO score is used as a tie-breaker and slight bias (0.1 * hpo_score added to metric value for comparison).
+        """
         if only_good:
             nodes = self.good_nodes
             if not nodes:
                 return None
         else:
             nodes = self.nodes
-        return max(nodes, key=lambda n: n.metric)
+        
+        def node_value(n: Node) -> float:
+            """Calculate node value including HPO bias."""
+            if n.metric.value is None:
+                return float('-inf')
+            # Add HPO bias: 0.1 * hpo_score to metric value for selection
+            hpo_bias = 0.1 * getattr(n, 'hpo_score', 0)
+            # Scale bias by metric magnitude to avoid overwhelming small metrics
+            metric_scale = abs(n.metric.value) if abs(n.metric.value) > 0.01 else 1.0
+            base_value = n.metric.value
+            if n.metric.maximize:
+                return base_value + (hpo_bias * metric_scale * 0.01)
+            else:
+                return base_value - (hpo_bias * metric_scale * 0.01)  # For minimize, subtract bias
+        
+        return max(nodes, key=node_value)
 
     def generate_summary(self, include_code: bool = False) -> str:
         """Generate a summary of the journal for the agent."""
