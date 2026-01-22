@@ -188,15 +188,17 @@ class Journal(DataClassJsonMixin):
             """Calculate node value including HPO bias."""
             if n.metric.value is None:
                 return float('-inf')
-            # Add HPO bias: 0.1 * hpo_score to metric value for selection
-            hpo_bias = 0.1 * getattr(n, 'hpo_score', 0)
+            # Add HPO bias: stronger bias for better HPO scores
+            hpo_score = getattr(n, 'hpo_score', 0)
+            # Use a stronger bias: 0.2 * hpo_score (was 0.1)
+            hpo_bias = 0.2 * hpo_score
             # Scale bias by metric magnitude to avoid overwhelming small metrics
             metric_scale = abs(n.metric.value) if abs(n.metric.value) > 0.01 else 1.0
             base_value = n.metric.value
             if n.metric.maximize:
-                return base_value + (hpo_bias * metric_scale * 0.01)
+                return base_value + (hpo_bias * metric_scale * 0.02)  # Increased from 0.01
             else:
-                return base_value - (hpo_bias * metric_scale * 0.01)  # For minimize, subtract bias
+                return base_value - (hpo_bias * metric_scale * 0.02)  # For minimize, subtract bias
         
         return max(nodes, key=node_value)
 
@@ -204,11 +206,14 @@ class Journal(DataClassJsonMixin):
         """Generate a summary of the journal for the agent."""
         summary = []
         for n in self.good_nodes:
+            hpo_score = getattr(n, 'hpo_score', 0)
+            hpo_status = ["none", "superficial", "moderate", "extensive"][hpo_score] if 0 <= hpo_score <= 3 else "unknown"
             summary_part = f"Design: {n.plan}\n"
             if include_code:
                 summary_part += f"Code: {n.code}\n"
             summary_part += f"Results: {n.analysis}\n"
             summary_part += f"Validation Metric: {n.metric.value}\n"
+            summary_part += f"Hyperparameter Tuning: {hpo_status} (score: {hpo_score}/3)\n"
             summary.append(summary_part)
         return "\n-------------------------------\n".join(summary)
 
