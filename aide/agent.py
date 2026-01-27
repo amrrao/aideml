@@ -392,16 +392,30 @@ class Agent:
             "Instructions": {},
         }
         prompt["Instructions"] |= self._prompt_resp_fmt
+        # Build solution sketch guidelines
+        solution_guidelines = [
+            "This first solution design should be relatively simple, without ensembling.",
+            "Take the Memory section into consideration when proposing the design,"
+            " don't propose the same modelling solution but keep the evaluation the same.",
+            "The solution sketch should be 3-5 sentences.",
+            "Propose an evaluation metric that is reasonable for this task.",
+            "Don't suggest to do EDA.",
+            "The data is already prepared and available in the `./input` directory. There is no need to unzip any files.",
+        ]
+        
+        # Add HPO encouragement after 30% of steps
+        progress_ratio = self.current_step / max(self.acfg.steps, 1)
+        if progress_ratio > 0.3:
+            solution_guidelines.insert(1,
+                "**Note: Since you're past the initial exploration phase, consider including basic hyperparameter tuning** "
+                "(e.g., testing 3-5 values for key hyperparameters like learning_rate, n_estimators, or regularization strength) "
+                "to establish a stronger baseline."
+            )
+        else:
+            solution_guidelines.insert(1, "You may include basic hyperparameter tuning if appropriate.")
+        
         prompt["Instructions"] |= {
-            "Solution sketch guideline": [
-                "This first solution design should be relatively simple, without ensembling or hyper-parameter optimization.",
-                "Take the Memory section into consideration when proposing the design,"
-                " don't propose the same modelling solution but keep the evaluation the same.",
-                "The solution sketch should be 3-5 sentences.",
-                "Propose an evaluation metric that is reasonable for this task.",
-                "Don't suggest to do EDA.",
-                "The data is already prepared and available in the `./input` directory. There is no need to unzip any files.",
-            ],
+            "Solution sketch guideline": solution_guidelines,
         }
         prompt["Instructions"] |= self._prompt_impl_guideline
         prompt["Instructions"] |= self._prompt_environment
@@ -439,14 +453,37 @@ class Agent:
         }
 
         prompt["Instructions"] |= self._prompt_resp_fmt
+        
+        # Check HPO status and add guidance
+        parent_hpo_score = getattr(parent_node, 'hpo_score', 0)
+        if parent_hpo_score == 0:
+            hpo_guideline = [
+                "**CRITICAL: The previous solution has NO hyperparameter tuning (HPO score: 0). "
+                "You MUST add hyperparameter tuning** using GridSearchCV, RandomizedSearchCV, Optuna, "
+                "Hyperopt, or manual loops searching over ≥3 values for ≥1 hyperparameter. "
+                "This is required to improve model performance."
+            ]
+        elif parent_hpo_score == 1:
+            hpo_guideline = [
+                "**IMPORTANT: The previous solution has only superficial hyperparameter tuning (HPO score: 1). "
+                "You should improve it** by testing more hyperparameter values (≥5 iterations), "
+                "searching over multiple hyperparameters, or using a more systematic approach."
+            ]
+        elif parent_hpo_score == 2:
+            hpo_guideline = [
+                "The previous solution has moderate hyperparameter tuning (HPO score: 2). "
+                "Consider expanding the search space or tuning additional hyperparameters to reach extensive tuning (score 3)."
+            ]
+        else:
+            hpo_guideline = []
+        
         prompt["Instructions"] |= {
             "Solution improvement sketch guideline": [
                 "The solution sketch should be a brief natural language description of how the previous solution can be improved.",
                 "You should be very specific and should only propose a single actionable improvement.",
                 "This improvement should be atomic so that we can experimentally evaluate the effect of the proposed change.",
                 "Take the Memory section into consideration when proposing the improvement.",
-                # Commented out: Hyperparameter tuning enforcement
-                # "**IMPORTANT: If the previous solution does not include hyperparameter tuning, you MUST add it** (e.g., GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, or manual loops searching over ≥2 values for ≥1 hyperparameter).",
+                *hpo_guideline,
                 "The solution sketch should be 3-5 sentences.",
                 "Don't suggest to do EDA.",
             ],
@@ -487,12 +524,15 @@ class Agent:
             "Don't suggest to do EDA.",
         ]
         
-        # Commented out: Hyperparameter tuning enforcement
-        # # Check if the rejection was due to missing hyperparameter tuning
-        # if parent_node.analysis and "missing hyperparameter tuning" in parent_node.analysis.lower():
-        #     bugfix_guidelines.insert(1, 
-        #         "**CRITICAL: The previous solution was rejected for missing hyperparameter tuning. You MUST add hyperparameter tuning** (e.g., GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, or manual loops searching over ≥2 values for ≥1 hyperparameter). This is required for the solution to be accepted."
-        #     )
+        # Check HPO status and add guidance if missing
+        parent_hpo_score = getattr(parent_node, 'hpo_score', 0)
+        if parent_hpo_score == 0:
+            bugfix_guidelines.insert(1,
+                "**IMPORTANT: The previous solution has NO hyperparameter tuning. "
+                "After fixing the bug, you should also add hyperparameter tuning** "
+                "(e.g., GridSearchCV, RandomizedSearchCV, Optuna, Hyperopt, or manual loops "
+                "searching over ≥3 values for ≥1 hyperparameter) to improve performance."
+            )
         
         prompt["Instructions"] |= {
             "Bugfix improvement sketch guideline": bugfix_guidelines,
